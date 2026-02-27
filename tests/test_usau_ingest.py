@@ -1,4 +1,5 @@
 from datetime import date
+import pytest
 
 from usau_rankings.rating_engine import Game
 from usau_rankings.usau_ingest import fetch_games
@@ -51,3 +52,12 @@ def test_fetch_games_builds_solver_games_from_json_endpoint(monkeypatch):
         Game(date(2024, 3, 15), "Truck Stop", "PoNY", 15, 12),
         Game(date(2024, 3, 16), "Bravo", "Sockeye", 13, 15),
     ]
+
+
+def test_fetch_games_raises_when_requests_missing(monkeypatch):
+    import usau_rankings.usau_ingest as ingest
+
+    monkeypatch.setattr(ingest, "requests", None)
+
+    with pytest.raises(RuntimeError, match="requests must be installed"):
+        ingest.fetch_games_with_metadata(2024, "club-mens")
