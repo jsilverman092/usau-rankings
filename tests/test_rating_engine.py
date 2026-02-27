@@ -6,6 +6,7 @@ from usau_rankings.rating_engine import (
     DEFAULT_RATING,
     Game,
     TeamGameRating,
+    _ignored_blowouts,
     calculate_game_rating,
     date_weight,
     game_rating_value,
@@ -173,3 +174,49 @@ def test_blowout_rule_ignores_game_when_high_rated_winner_has_other_results():
 
     assert ratings_with_ignore["B"] == pytest.approx(DEFAULT_RATING)
     assert ratings_without_ignore["B"] < DEFAULT_RATING
+
+
+def test_ignored_blowouts_ignores_blowout_when_winner_has_enough_other_results():
+    games = [
+        Game(date(2024, 1, 1), "A", "B", 15, 5),
+        Game(date(2024, 1, 2), "A", "C", 15, 12),
+        Game(date(2024, 1, 3), "A", "D", 15, 12),
+        Game(date(2024, 1, 4), "A", "E", 15, 12),
+        Game(date(2024, 1, 5), "A", "F", 15, 12),
+        Game(date(2024, 1, 6), "A", "G", 15, 12),
+    ]
+    ratings = {
+        "A": 1700.0,
+        "B": 1000.0,
+        "C": 1000.0,
+        "D": 1000.0,
+        "E": 1000.0,
+        "F": 1000.0,
+        "G": 1000.0,
+    }
+
+    ignored = _ignored_blowouts(games, ratings, min_other_results=5)
+
+    assert 0 in ignored
+
+
+def test_ignored_blowouts_keeps_blowout_when_winner_lacks_other_results():
+    games = [
+        Game(date(2024, 1, 1), "A", "B", 15, 5),
+        Game(date(2024, 1, 2), "A", "C", 15, 12),
+        Game(date(2024, 1, 3), "A", "D", 15, 12),
+        Game(date(2024, 1, 4), "A", "E", 15, 12),
+        Game(date(2024, 1, 5), "A", "F", 15, 12),
+    ]
+    ratings = {
+        "A": 1700.0,
+        "B": 1000.0,
+        "C": 1000.0,
+        "D": 1000.0,
+        "E": 1000.0,
+        "F": 1000.0,
+    }
+
+    ignored = _ignored_blowouts(games, ratings, min_other_results=5)
+
+    assert 0 not in ignored

@@ -149,6 +149,12 @@ def _ignored_blowouts(
     """Return game indices ignored under the 600-point blowout rule."""
 
     ignored: set[int] = set()
+    participants = [(game.team_a, game.team_b) for game in games]
+
+    non_ignored_results_by_team: dict[str, int] = {}
+    for team_a, team_b in participants:
+        non_ignored_results_by_team[team_a] = non_ignored_results_by_team.get(team_a, 0) + 1
+        non_ignored_results_by_team[team_b] = non_ignored_results_by_team.get(team_b, 0) + 1
 
     while True:
         changed = False
@@ -162,15 +168,14 @@ def _ignored_blowouts(
             if rating_gap <= 600 or not is_blowout:
                 continue
 
-            non_ignored_for_winner = 0
-            for other_idx, other_game in enumerate(games):
-                if other_idx == idx or other_idx in ignored:
-                    continue
-                if winner in (other_game.team_a, other_game.team_b):
-                    non_ignored_for_winner += 1
+            # Subtract the current game because "other" results exclude it.
+            non_ignored_for_winner = non_ignored_results_by_team[winner] - 1
 
             if non_ignored_for_winner >= min_other_results:
                 ignored.add(idx)
+                team_a, team_b = participants[idx]
+                non_ignored_results_by_team[team_a] -= 1
+                non_ignored_results_by_team[team_b] -= 1
                 changed = True
 
         if not changed:
