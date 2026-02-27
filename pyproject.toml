@@ -3,7 +3,16 @@ name = "usau-rankings"
 version = "0.1.0"
 description = "USA Ultimate rankings engine and simulator"
 requires-python = ">=3.8"
-dependencies = []
+dependencies = [
+    "requests>=2.31",
+    "beautifulsoup4>=4.12",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7",
+    "responses>=0.25",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
