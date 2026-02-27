@@ -1,6 +1,6 @@
 import pytest
 
-from usau_rankings.rating_engine import game_rating_value
+from usau_rankings.rating_engine import calculate_game_rating, game_rating_value
 
 
 @pytest.mark.parametrize(
@@ -54,3 +54,23 @@ def test_shutouts_are_max_value():
 def test_input_validation(winner_score, loser_score, error):
     with pytest.raises(error):
         game_rating_value(winner_score, loser_score)
+
+
+def test_calculate_game_rating_returns_both_team_game_ratings():
+    winner_game_rating, loser_game_rating = calculate_game_rating(1000, 900, 15, 10)
+
+    assert winner_game_rating == pytest.approx(900 + game_rating_value(15, 10))
+    assert loser_game_rating == pytest.approx(1000 - game_rating_value(15, 10))
+
+
+@pytest.mark.parametrize(
+    ("winner_rating", "loser_rating", "error"),
+    [
+        ("1000", 900, TypeError),
+        (1000, object(), TypeError),
+        (True, 900, TypeError),
+    ],
+)
+def test_calculate_game_rating_validates_team_ratings(winner_rating, loser_rating, error):
+    with pytest.raises(error):
+        calculate_game_rating(winner_rating, loser_rating, 15, 10)
