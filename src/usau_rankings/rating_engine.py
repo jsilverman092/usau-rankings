@@ -12,6 +12,11 @@ def _validate_score(name: str, value: int) -> None:
         raise ValueError(f"{name} must be >= 0")
 
 
+def _validate_rating(name: str, value: float) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be a number")
+
+
 def game_rating_value(winner_score: int, loser_score: int) -> float:
     """Return the USAU rating value earned by the winning team.
 
@@ -36,6 +41,27 @@ def game_rating_value(winner_score: int, loser_score: int) -> float:
     return float(x)
 
 
-# Backward-compatible aliases.
-calculate_game_rating = game_rating_value
+def calculate_game_rating(
+    winner_rating: float,
+    loser_rating: float,
+    winner_score: int,
+    loser_score: int,
+) -> tuple[float, float]:
+    """Return USAU game ratings for winner and loser.
+
+    USAU game ratings are calculated by applying the score-based game value
+    to the opponent's rating:
+
+    * winner_game_rating = loser_rating + game_rating_value
+    * loser_game_rating = winner_rating - game_rating_value
+    """
+
+    _validate_rating("winner_rating", winner_rating)
+    _validate_rating("loser_rating", loser_rating)
+
+    value = game_rating_value(winner_score, loser_score)
+    return float(loser_rating + value), float(winner_rating - value)
+
+
+# Backward-compatible alias.
 winner_rating_value = game_rating_value
