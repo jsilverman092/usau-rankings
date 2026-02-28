@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+import time
+from typing import Any, Optional
 
 from .rating_engine import Game
 
@@ -21,6 +22,20 @@ except ImportError:  # pragma: no cover - environment dependent
 
 API_GAMES_URL = "https://play.usaultimate.org/api/v1/games/"
 HTML_RESULTS_URL = "https://play.usaultimate.org/events/results/"
+
+
+# These headers matter: without them, play.usaultimate.org may drop connections
+# for "non-browser" clients.
+DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    # This can help with some intermediaries / servers that dislike keep-alive from scripts.
+    "Connection": "close",
+}
 
 
 @dataclass(frozen=True)
@@ -101,15 +116,48 @@ def _parse_item(item: dict[str, Any]) -> IngestedGame | None:
     )
 
 
-def fetch_games_with_metadata(season_year: int, division: str) -> list[IngestedGame]:
-    """Fetch games for a season and division from USAU endpoints."""
-
+def _get_session() -> "requests.Session":
     if requests is None:  # pragma: no cover - environment dependent
         raise RuntimeError("requests must be installed to fetch USAU games")
 
+    s = requests.Session()
+    s.headers.update(DEFAULT_HEADERS)
+    return s
+
+
+def _get_with_retries(
+    session: "requests.Session",
+    url: str,
+    *,
+    params: dict[str, Any] | None = None,
+    timeout: int = 30,
+    max_attempts: int = 3,
+    backoff_seconds: float = 0.75,
+) -> "requests.Response":
+    last_exc: Optional[BaseException] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = session.get(url, params=params, timeout=timeout)
+            resp.raise_for_status()
+            return resp
+        except Exception as exc:  # noqa: BLE001 - want to retry common request failures
+            last_exc = exc
+            if attempt == max_attempts:
+                raise
+            time.sleep(backoff_seconds * attempt)
+
+    # Should be unreachable.
+    assert last_exc is not None
+    raise last_exc
+
+
+def fetch_games_with_metadata(season_year: int, division: str) -> list[IngestedGame]:
+    """Fetch games for a season and division from USAU endpoints."""
+
+    session = _get_session()
     params = {"season": season_year, "division": division}
-    response = requests.get(API_GAMES_URL, params=params, timeout=30)
-    response.raise_for_status()
+
+    response = _get_with_retries(session, API_GAMES_URL, params=params)
 
     parsed: list[IngestedGame] = []
     try:
@@ -126,12 +174,13 @@ def fetch_games_with_metadata(season_year: int, division: str) -> list[IngestedG
         parsed.sort(key=lambda value: value.game.date)
         return parsed
 
+    # Fallback: scrape HTML results table if JSON is empty/unavailable.
     if BeautifulSoup is None:
         return parsed
 
-    html_response = requests.get(HTML_RESULTS_URL, params=params, timeout=30)
-    html_response.raise_for_status()
+    html_response = _get_with_retries(session, HTML_RESULTS_URL, params=params)
     soup = BeautifulSoup(html_response.text, "html.parser")
+
     for tag in soup.select("table tbody tr"):
         cells = [cell.get_text(strip=True) for cell in tag.select("td")]
         if len(cells) < 5:

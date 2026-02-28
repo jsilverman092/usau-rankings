@@ -61,3 +61,24 @@ def test_fetch_games_raises_when_requests_missing(monkeypatch):
 
     with pytest.raises(RuntimeError, match="requests must be installed"):
         ingest.fetch_games_with_metadata(2024, "club-mens")
+
+
+def test_ingest_uses_session_with_browser_headers(monkeypatch):
+    import usau_rankings.usau_ingest as ingest
+
+    class _FakeResponse:
+        def raise_for_status(self): return None
+        def json(self): return {"results": []}
+
+    class _FakeSession:
+        def __init__(self):
+            self.headers = {}
+        def get(self, url, params=None, timeout=30):
+            return _FakeResponse()
+
+    fake = _FakeSession()
+    monkeypatch.setattr(ingest, "requests", type("R", (), {"Session": lambda: fake}))
+    monkeypatch.setattr(ingest, "BeautifulSoup", None)  # <-- key line
+
+    ingest.fetch_games_with_metadata(2024, "club-mens")
+    assert "User-Agent" in fake.headers
