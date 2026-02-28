@@ -44,7 +44,16 @@ def test_fetch_games_builds_solver_games_from_json_endpoint(monkeypatch):
             },
         ]
     }
-    monkeypatch.setattr("usau_rankings.usau_ingest.requests", _FakeRequests(payload))
+
+    class _FakeSession:
+        def __init__(self, payload):
+            self._payload = payload
+            self.headers = {}
+
+        def get(self, url, params=None, timeout=30):
+            return _FakeResponse(self._payload)
+
+    monkeypatch.setattr("usau_rankings.usau_ingest._get_session", lambda: _FakeSession(payload))
 
     games = fetch_games(2024, "club-mens")
 
