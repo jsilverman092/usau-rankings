@@ -32,6 +32,22 @@ def _score_str(row: pd.Series) -> str:
     return "N/A"
 
 
+def _rgba_impact(val: float, max_abs: float) -> str:
+    """Soft, translucent red/green background without matplotlib."""
+    if pd.isna(val) or max_abs <= 0:
+        return ""
+    x = float(val) / max_abs
+    x = max(-1.0, min(1.0, x))
+
+    # softness knob: lower base + moderate scaling = less "solid"
+    alpha = 0.08 + 0.35 * abs(x)
+
+    # green for positive, red for negative
+    if x >= 0:
+        return f"background-color: rgba(0, 160, 90, {alpha:.3f});"
+    return f"background-color: rgba(220, 60, 60, {alpha:.3f});"
+
+
 with st.sidebar:
     st.header("Data")
     data_path = st.text_input("games.json path", value="./games.json")
@@ -45,7 +61,6 @@ except Exception as exc:  # noqa: BLE001
 if games.empty:
     st.warning("No games found in file.")
     st.stop()
-
 
 # Shared filters
 with st.sidebar:
@@ -101,7 +116,6 @@ if team_query.strip():
 filtered = filtered[filtered["point_diff"].fillna(0).between(point_diff_range[0], point_diff_range[1])]
 if close_games_only:
     filtered = filtered[filtered["point_diff"].fillna(10**6) <= close_games_n]
-
 
 tab_games, tab_teams, tab_events, tab_rankings = st.tabs(["Games", "Teams", "Events", "Rankings"])
 
@@ -187,13 +201,15 @@ with tab_teams:
     )
     team_games_view["score"] = team_games_view.apply(_score_str, axis=1)
     team_games_view["result"] = team_games_view.apply(
-        lambda r: "W" if r["winner"] == selected_team else ("L" if pd.notna(r["winner"]) and r["winner"] != "Tie" else "-"),
+        lambda r: "W"
+        if r["winner"] == selected_team
+        else ("L" if pd.notna(r["winner"]) and r["winner"] != "Tie" else "-"),
         axis=1,
     )
     st.dataframe(
-        team_games_view[
-            ["game_date", "event", "opponent", "result", "score", "status", "event_game_id"]
-        ].sort_values("game_date", ascending=False),
+        team_games_view[["game_date", "event", "opponent", "result", "score", "status", "event_game_id"]].sort_values(
+            "game_date", ascending=False
+        ),
         hide_index=True,
         use_container_width=True,
     )
@@ -237,10 +253,7 @@ with tab_events:
                 }
             )
         standings = (
-            pd.DataFrame(rows)
-            .groupby("team", as_index=False)
-            .sum()
-            .sort_values(["w", "pd"], ascending=[False, False])
+            pd.DataFrame(rows).groupby("team", as_index=False).sum().sort_values(["w", "pd"], ascending=[False, False])
         )
         st.dataframe(standings, hide_index=True, use_container_width=True)
 
@@ -284,23 +297,23 @@ with tab_rankings:
                         "games_played": int(gp_counts.get(team, 0)),
                     }
                 )
+
             rankings_df = pd.DataFrame(ranking_rows).sort_values("rating", ascending=False).reset_index(drop=True)
             rankings_df.insert(2, "rank", rankings_df.index + 1)
 
-            st.caption(
-                f"Computed from {len(games_list):,} final non-tied games "
-                f"({season_start} to {season_end})."
-            )
-            st.dataframe(
-                rankings_df[["team", "rating", "rank", "W", "L", "games_played"]],
-                hide_index=True,
-                use_container_width=True,
-            )
+            st.caption(f"Computed from {len(games_list):,} final non-tied games ({season_start} to {season_end}).")
+
+            # Display-only rounding for main table
+            rankings_main = rankings_df[["team", "rating", "rank", "W", "L", "games_played"]].copy()
+            rankings_main["rating"] = rankings_main["rating"].map(lambda x: round(float(x), 2))
+            st.dataframe(rankings_main, hide_index=True, use_container_width=True)
 
             st.markdown("#### Team impact games")
-            selected_team = st.selectbox("Select team for impact view", options=rankings_df["team"].tolist())
 
-            event_lookup = {}
+            team_options = sorted(rankings_df["team"].tolist())
+            selected_team = st.selectbox("Select team for impact view", options=team_options)
+
+            event_lookup: dict[tuple[date, str, str, int, int], str] = {}
             for row in final_games.itertuples(index=False):
                 key = (row.game_date, str(row.team1), str(row.team2), int(row.score1), int(row.score2))
                 event_lookup[key] = str(row.event)
@@ -317,18 +330,55 @@ with tab_rankings:
             if impact_df.empty:
                 st.info("No impact games found for this team.")
             else:
-                st.dataframe(
-                    impact_df[[
-                        "game_date",
-                        "event",
-                        "opponent",
-                        "score",
-                        "result",
-                        "opponent_rating",
-                        "game_rating",
-                        "combined_weight",
-                        "weighted_contribution",
-                    ]].sort_values("game_date", ascending=False),
-                    hide_index=True,
-                    use_container_width=True,
+                team_rating = float(ratings.get(selected_team, 0.0))
+                impact_df["team_rating"] = team_rating
+
+                # Approx marginal impact of each game on the team's final rating:
+                # impact_k = R_with_all - R_without_k (weighted-average leave-one-out; holds game_ratings/weights fixed)
+                total_w = float(impact_df["combined_weight"].sum())
+                total_wc = float(impact_df["weighted_contribution"].sum())
+
+                def _loo_impact(row: pd.Series) -> float:
+                    w = float(row["combined_weight"])
+                    wc = float(row["weighted_contribution"])
+                    denom = total_w - w
+                    if denom <= 0:
+                        return 0.0
+                    rating_without = (total_wc - wc) / denom
+                    return team_rating - rating_without  # + means this game boosts rating
+
+                impact_df["rating_impact"] = impact_df.apply(_loo_impact, axis=1)
+
+                impact_df = impact_df.sort_values("game_date", ascending=False)
+
+                display_cols = [
+                    "game_date",
+                    "event",
+                    "opponent",
+                    "score",
+                    "result",
+                    "team_rating",
+                    "opponent_rating",
+                    "game_rating",
+                    "rating_impact",
+                    "combined_weight",
+                    "weighted_contribution",
+                ]
+
+                fmt = {
+                    "team_rating": "{:.2f}",
+                    "opponent_rating": "{:.2f}",
+                    "game_rating": "{:.2f}",
+                    "rating_impact": "{:+.2f}",
+                    "combined_weight": "{:.2f}",
+                    "weighted_contribution": "{:.2f}",
+                }
+
+                max_abs = float(impact_df["rating_impact"].abs().max() or 1.0)
+                styled = (
+                    impact_df[display_cols]
+                    .style.format(fmt)
+                    .applymap(lambda v: _rgba_impact(v, max_abs), subset=["rating_impact"])
                 )
+
+                st.dataframe(styled, hide_index=True, use_container_width=True)
