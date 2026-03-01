@@ -7,6 +7,8 @@ from datetime import date
 import math
 from typing import Iterable
 
+import pandas as pd
+
 
 DEFAULT_RATING = 1000.0
 
@@ -240,3 +242,98 @@ def solve_ratings(
 
 # Backward-compatible alias.
 winner_rating_value = game_rating_value
+
+
+def build_games_from_df(games_df: pd.DataFrame) -> list[Game]:
+    """Build solver-ready ``Game`` rows from a normalized games dataframe.
+
+    Only final, non-tied games are included.
+    """
+
+    if games_df.empty:
+        return []
+
+    mask = (
+        games_df["is_final"].fillna(False)
+        & games_df["score1"].notna()
+        & games_df["score2"].notna()
+        & games_df["game_date"].notna()
+        & games_df["team1"].notna()
+        & games_df["team2"].notna()
+        & (games_df["score1"] != games_df["score2"])
+    )
+
+    games: list[Game] = []
+    for row in games_df.loc[mask].itertuples(index=False):
+        games.append(
+            Game(
+                date=row.game_date,
+                team_a=str(row.team1),
+                team_b=str(row.team2),
+                score_a=int(row.score1),
+                score_b=int(row.score2),
+            )
+        )
+    return games
+
+
+def build_team_impact_rows(
+    games: list[Game],
+    ratings: dict[str, float],
+    selected_team: str,
+    season_start: date,
+    season_end: date,
+    event_lookup: dict[tuple[date, str, str, int, int], str] | None = None,
+) -> list[dict[str, float | str | date]]:
+    """Return per-game impact rows for ``selected_team`` using solved ratings."""
+
+    rows: list[dict[str, float | str | date]] = []
+    for game in games:
+        if selected_team not in (game.team_a, game.team_b):
+            continue
+
+        winner, loser, winner_score, loser_score = _winner_loser(game)
+        winner_game_rating, loser_game_rating = calculate_game_rating(
+            ratings[winner],
+            ratings[loser],
+            winner_score,
+            loser_score,
+        )
+        combined_weight = date_weight(game.date, season_start, season_end) * score_weight(
+            winner_score,
+            loser_score,
+        )
+
+        if selected_team == winner:
+            game_rating = winner_game_rating
+            opponent = loser
+            team_score = winner_score
+            opp_score = loser_score
+            result = "W"
+        else:
+            game_rating = loser_game_rating
+            opponent = winner
+            team_score = loser_score
+            opp_score = winner_score
+            result = "L"
+
+        event = "Unknown"
+        if event_lookup is not None:
+            key = (game.date, game.team_a, game.team_b, game.score_a, game.score_b)
+            event = event_lookup.get(key, "Unknown")
+
+        rows.append(
+            {
+                "game_date": game.date,
+                "event": event,
+                "opponent": opponent,
+                "score": f"{team_score}-{opp_score}",
+                "result": result,
+                "opponent_rating": float(ratings[opponent]),
+                "game_rating": float(game_rating),
+                "combined_weight": float(combined_weight),
+                "weighted_contribution": float(game_rating * combined_weight),
+            }
+        )
+
+    return rows
