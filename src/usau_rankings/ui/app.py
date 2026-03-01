@@ -6,6 +6,7 @@ from urllib.parse import quote_plus
 import pandas as pd
 import streamlit as st
 
+from usau_rankings.rating_engine import build_games_from_df, build_team_impact_rows, solve_ratings
 from usau_rankings.ui.utils import load_games_data, normalize_team_name
 
 st.set_page_config(page_title="USAU Match Explorer", layout="wide")
@@ -245,4 +246,89 @@ with tab_events:
 
 with tab_rankings:
     st.subheader("Rankings")
-    st.info("Rankings are not wired yet. Next step: connect this tab to usau_rankings.rating_engine.")
+
+    final_games = games[games["is_final"]].copy()
+    if final_games.empty:
+        st.info("No final games available to compute rankings.")
+    else:
+        season_start = final_games["game_date"].min()
+        season_end = final_games["game_date"].max()
+
+        games_list = build_games_from_df(final_games)
+        if not games_list:
+            st.info("No valid final non-tied games available to compute rankings.")
+        else:
+            ratings = solve_ratings(games_list, season_start=season_start, season_end=season_end)
+
+            w_counts: dict[str, int] = {}
+            l_counts: dict[str, int] = {}
+            gp_counts: dict[str, int] = {}
+            for game in games_list:
+                if game.score_a > game.score_b:
+                    winner, loser = game.team_a, game.team_b
+                else:
+                    winner, loser = game.team_b, game.team_a
+                w_counts[winner] = w_counts.get(winner, 0) + 1
+                l_counts[loser] = l_counts.get(loser, 0) + 1
+                gp_counts[game.team_a] = gp_counts.get(game.team_a, 0) + 1
+                gp_counts[game.team_b] = gp_counts.get(game.team_b, 0) + 1
+
+            ranking_rows = []
+            for team, rating in ratings.items():
+                ranking_rows.append(
+                    {
+                        "team": team,
+                        "rating": float(rating),
+                        "W": int(w_counts.get(team, 0)),
+                        "L": int(l_counts.get(team, 0)),
+                        "games_played": int(gp_counts.get(team, 0)),
+                    }
+                )
+            rankings_df = pd.DataFrame(ranking_rows).sort_values("rating", ascending=False).reset_index(drop=True)
+            rankings_df.insert(2, "rank", rankings_df.index + 1)
+
+            st.caption(
+                f"Computed from {len(games_list):,} final non-tied games "
+                f"({season_start} to {season_end})."
+            )
+            st.dataframe(
+                rankings_df[["team", "rating", "rank", "W", "L", "games_played"]],
+                hide_index=True,
+                use_container_width=True,
+            )
+
+            st.markdown("#### Team impact games")
+            selected_team = st.selectbox("Select team for impact view", options=rankings_df["team"].tolist())
+
+            event_lookup = {}
+            for row in final_games.itertuples(index=False):
+                key = (row.game_date, str(row.team1), str(row.team2), int(row.score1), int(row.score2))
+                event_lookup[key] = str(row.event)
+
+            impact_rows = build_team_impact_rows(
+                games_list,
+                ratings,
+                selected_team=selected_team,
+                season_start=season_start,
+                season_end=season_end,
+                event_lookup=event_lookup,
+            )
+            impact_df = pd.DataFrame(impact_rows)
+            if impact_df.empty:
+                st.info("No impact games found for this team.")
+            else:
+                st.dataframe(
+                    impact_df[[
+                        "game_date",
+                        "event",
+                        "opponent",
+                        "score",
+                        "result",
+                        "opponent_rating",
+                        "game_rating",
+                        "combined_weight",
+                        "weighted_contribution",
+                    ]].sort_values("game_date", ascending=False),
+                    hide_index=True,
+                    use_container_width=True,
+                )

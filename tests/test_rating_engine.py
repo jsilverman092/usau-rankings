@@ -1,5 +1,7 @@
+import math
 from datetime import date
 
+import pandas as pd
 import pytest
 
 from usau_rankings.rating_engine import (
@@ -7,6 +9,8 @@ from usau_rankings.rating_engine import (
     Game,
     TeamGameRating,
     _ignored_blowouts,
+    build_games_from_df,
+    build_team_impact_rows,
     calculate_game_rating,
     date_weight,
     game_rating_value,
@@ -220,3 +224,109 @@ def test_ignored_blowouts_keeps_blowout_when_winner_lacks_other_results():
     ignored = _ignored_blowouts(games, ratings, min_other_results=5)
 
     assert 0 not in ignored
+
+
+def test_build_games_from_df_excludes_non_finals_and_ties():
+    games_df = pd.DataFrame(
+        [
+            {
+                "game_date": date(2024, 1, 1),
+                "team1": "A",
+                "team2": "B",
+                "score1": 15,
+                "score2": 13,
+                "is_final": True,
+            },
+            {
+                "game_date": date(2024, 1, 2),
+                "team1": "A",
+                "team2": "C",
+                "score1": 13,
+                "score2": 13,
+                "is_final": True,
+            },
+            {
+                "game_date": date(2024, 1, 3),
+                "team1": "B",
+                "team2": "C",
+                "score1": 15,
+                "score2": 10,
+                "is_final": False,
+            },
+        ]
+    )
+
+    games = build_games_from_df(games_df)
+
+    assert len(games) == 1
+    assert games[0] == Game(date(2024, 1, 1), "A", "B", 15, 13)
+
+
+def test_solve_ratings_returns_ratings_for_all_teams():
+    games = [
+        Game(date(2024, 1, 1), "A", "B", 15, 10),
+        Game(date(2024, 1, 2), "B", "C", 15, 13),
+        Game(date(2024, 1, 3), "C", "A", 15, 12),
+    ]
+
+    ratings = solve_ratings(games, season_start=date(2024, 1, 1), season_end=date(2024, 1, 31))
+
+    assert set(ratings) == {"A", "B", "C"}
+    assert all(math.isfinite(value) for value in ratings.values())
+
+
+def test_impact_calc_produces_expected_columns_and_finite_values():
+    games_df = pd.DataFrame(
+        [
+            {
+                "game_date": date(2024, 1, 1),
+                "event": "Event 1",
+                "team1": "A",
+                "team2": "B",
+                "score1": 15,
+                "score2": 12,
+                "is_final": True,
+            },
+            {
+                "game_date": date(2024, 1, 2),
+                "event": "Event 2",
+                "team1": "C",
+                "team2": "A",
+                "score1": 15,
+                "score2": 10,
+                "is_final": True,
+            },
+        ]
+    )
+    games = build_games_from_df(games_df)
+    ratings = solve_ratings(games, season_start=date(2024, 1, 1), season_end=date(2024, 1, 2))
+    event_lookup = {
+        (r.game_date, r.team1, r.team2, int(r.score1), int(r.score2)): r.event
+        for r in games_df.itertuples(index=False)
+    }
+
+    rows = build_team_impact_rows(
+        games,
+        ratings,
+        selected_team="A",
+        season_start=date(2024, 1, 1),
+        season_end=date(2024, 1, 2),
+        event_lookup=event_lookup,
+    )
+    impact_df = pd.DataFrame(rows)
+
+    expected_columns = {
+        "game_date",
+        "event",
+        "opponent",
+        "score",
+        "result",
+        "opponent_rating",
+        "game_rating",
+        "combined_weight",
+        "weighted_contribution",
+    }
+    assert expected_columns.issubset(set(impact_df.columns))
+    assert len(impact_df) == 2
+    for col in ["opponent_rating", "game_rating", "combined_weight", "weighted_contribution"]:
+        assert impact_df[col].map(math.isfinite).all()
