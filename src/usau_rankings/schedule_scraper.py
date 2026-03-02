@@ -14,7 +14,7 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
-from usau_rankings.match_report_parser import parse_match_report_html
+from usau_rankings.match_report_parser import MatchReportParseError, parse_match_report_html
 
 
 DEFAULT_HEADERS = {
@@ -212,7 +212,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.url:
         sleep_jitter(cfg)
         html = fetch(session, args.url, None, cfg)
-        row = _call_parser(html, source=args.url)
+        try:
+            row = _call_parser(html, source=args.url)
+        except MatchReportParseError as e:
+            print(f"[skip] parse error for {args.url}: {e}", file=sys.stderr)
+            return 0
         upsert_game(out, row)
         return 0
 
@@ -226,7 +230,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[{i}/{len(urls)}] {url}")
             sleep_jitter(cfg)
             html = fetch(session, url, args.event_url, cfg)
-            row = _call_parser(html, source=url)
+            try:
+                row = _call_parser(html, source=url)
+            except MatchReportParseError as e:
+                print(f"[skip] parse error for {url}: {e}", file=sys.stderr)
+                continue
             upsert_game(out, row)
 
         return 0

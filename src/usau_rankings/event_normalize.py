@@ -18,6 +18,16 @@ _SERIES_KEYWORDS = [
     "national championship",
 ]
 
+# Explicit overrides for app logic
+FORCE_SERIES_EVENTS = {
+    "2025 South New England Men's Sectional Champonship",
+    # add more exact matches here
+}
+
+FORCE_NON_SERIES_EVENTS = {
+    # if something ever gets incorrectly flagged as series
+}
+
 
 def split_competition_groups(s: str) -> list[str]:
     if not isinstance(s, str) or not s.strip():
@@ -92,6 +102,13 @@ def is_cancelled_event_name(event_name: object) -> bool:
 def is_series_event(event_name: object) -> bool:
     if not isinstance(event_name, str):
         return False
+
+    # Hard overrides first
+    if event_name in FORCE_SERIES_EVENTS:
+        return True
+    if event_name in FORCE_NON_SERIES_EVENTS:
+        return False
+
     name_lower = event_name.lower()
     return any(keyword in name_lower for keyword in _SERIES_KEYWORDS)
 
