@@ -50,7 +50,7 @@ def _rgba_impact(val: float, max_abs: float) -> str:
 
 with st.sidebar:
     st.header("Data")
-    data_path = st.text_input("games.json path", value="./games.json")
+    data_path = st.text_input("games.json path", value="./data/games.json")
 
 try:
     games = _load_data(data_path)
@@ -264,8 +264,11 @@ with tab_rankings:
     if final_games.empty:
         st.info("No final games available to compute rankings.")
     else:
-        season_start = final_games["game_date"].min()
-        season_end = final_games["game_date"].max()
+        game_dates = pd.to_datetime(final_games["game_date"], errors="coerce")
+        season_start = game_dates.min()
+        season_start = None if pd.isna(season_start) else season_start.date()
+        season_end = game_dates.max()
+        season_end = None if pd.isna(season_end) else season_end.date()
 
         games_list = build_games_from_df(final_games)
         if not games_list:
@@ -330,13 +333,13 @@ with tab_rankings:
             if impact_df.empty:
                 st.info("No impact games found for this team.")
             else:
-                team_rating = float(ratings.get(selected_team, 0.0))
-                impact_df["team_rating"] = team_rating
+                solver_team_rating = float(ratings.get(selected_team, 0.0))
+                impact_df["solver_team_rating"] = solver_team_rating
 
-                # Approx marginal impact of each game on the team's final rating:
-                # impact_k = R_with_all - R_without_k (weighted-average leave-one-out; holds game_ratings/weights fixed)
                 total_w = float(impact_df["combined_weight"].sum())
                 total_wc = float(impact_df["weighted_contribution"].sum())
+                approx_team_rating = (total_wc / total_w) if total_w > 0 else solver_team_rating
+                impact_df["team_rating"] = approx_team_rating  # keep column name used by the table
 
                 def _loo_impact(row: pd.Series) -> float:
                     w = float(row["combined_weight"])
@@ -345,7 +348,7 @@ with tab_rankings:
                     if denom <= 0:
                         return 0.0
                     rating_without = (total_wc - wc) / denom
-                    return team_rating - rating_without  # + means this game boosts rating
+                    return approx_team_rating - rating_without
 
                 impact_df["rating_impact"] = impact_df.apply(_loo_impact, axis=1)
 
