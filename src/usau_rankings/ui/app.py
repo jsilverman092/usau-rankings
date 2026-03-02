@@ -6,7 +6,12 @@ from urllib.parse import quote_plus
 import pandas as pd
 import streamlit as st
 
-from usau_rankings.rating_engine import build_games_from_df, build_team_impact_rows, solve_ratings
+from usau_rankings.rating_engine import (
+    _ignored_blowouts,
+    build_games_from_df,
+    build_team_impact_rows,
+    solve_ratings,
+)
 from usau_rankings.ui.utils import load_games_data, normalize_team_name
 
 st.set_page_config(page_title="USAU Match Explorer", layout="wide")
@@ -333,6 +338,29 @@ with tab_rankings:
             if impact_df.empty:
                 st.info("No impact games found for this team.")
             else:
+                # --- Mark blowout-ignored games and zero their weight/impact fields ---
+                ignored_idx = _ignored_blowouts(games_list, ratings, min_other_results=5)
+
+                ignored_keys: set[tuple[date, str, str, str]] = set()
+                for i in ignored_idx:
+                    g = games_list[i]
+                    s1, s2 = int(g.score_a), int(g.score_b)
+                    # Include both orientations so we can match rows regardless of team perspective
+                    ignored_keys.add((g.date, g.team_a, g.team_b, f"{s1}-{s2}"))
+                    ignored_keys.add((g.date, g.team_b, g.team_a, f"{s2}-{s1}"))
+
+                impact_df["ignored_blowout"] = impact_df.apply(
+                    lambda r: (r["game_date"], selected_team, r["opponent"], r["score"]) in ignored_keys,
+                    axis=1,
+                )
+
+                # Zero-out fields for ignored games BEFORE totals/LOO math
+                impact_df.loc[
+                    impact_df["ignored_blowout"],
+                    ["combined_weight", "weighted_contribution", "rating_impact"],
+                ] = 0.0
+
+                # Use consistent baseline for LOO math (weighted-average baseline)
                 solver_team_rating = float(ratings.get(selected_team, 0.0))
                 impact_df["solver_team_rating"] = solver_team_rating
 
