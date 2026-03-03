@@ -368,6 +368,7 @@ with tab_rankings:
                 total_wc = float(impact_df["weighted_contribution"].sum())
                 approx_team_rating = (total_wc / total_w) if total_w > 0 else solver_team_rating
                 impact_df["team_rating"] = approx_team_rating  # keep column name used by the table
+                impact_df["rating_diff"] = impact_df["game_rating"] - impact_df["team_rating"]
 
                 def _loo_impact(row: pd.Series) -> float:
                     w = float(row["combined_weight"])
@@ -391,18 +392,18 @@ with tab_rankings:
                     "team_rating",
                     "opponent_rating",
                     "game_rating",
+                    "rating_diff",
                     "rating_impact",
                     "combined_weight",
-                    "weighted_contribution",
                 ]
 
                 fmt = {
                     "team_rating": "{:.2f}",
                     "opponent_rating": "{:.2f}",
                     "game_rating": "{:.2f}",
+                    "rating_diff": "{:+.2f}",
                     "rating_impact": "{:+.2f}",
                     "combined_weight": "{:.2f}",
-                    "weighted_contribution": "{:.2f}",
                 }
 
                 max_abs = float(impact_df["rating_impact"].abs().max() or 1.0)
