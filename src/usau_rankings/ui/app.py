@@ -6,12 +6,7 @@ from urllib.parse import quote_plus
 import pandas as pd
 import streamlit as st
 
-from usau_rankings.rating_engine import (
-    _ignored_blowouts,
-    build_games_from_df,
-    build_team_impact_rows,
-    solve_ratings,
-)
+from usau_rankings.rating_engine import _ignored_blowouts, build_games_from_df, build_team_impact_rows, solve_ratings
 from usau_rankings.ui.utils import load_games_data, normalize_team_name
 
 st.set_page_config(page_title="USAU Match Explorer", layout="wide")
@@ -316,7 +311,7 @@ with tab_rankings:
             rankings_main["rating"] = rankings_main["rating"].map(lambda x: round(float(x), 2))
             st.dataframe(rankings_main, hide_index=True, use_container_width=True)
 
-            st.markdown("#### Team impact games")
+            st.markdown("#### Event Impact")
 
             team_options = sorted(rankings_df["team"].tolist())
             selected_team = st.selectbox("Select team for impact view", options=team_options)
@@ -338,14 +333,16 @@ with tab_rankings:
             if impact_df.empty:
                 st.info("No impact games found for this team.")
             else:
-                # --- Mark blowout-ignored games and zero their weight/impact fields ---
-                ignored_idx = _ignored_blowouts(games_list, ratings, min_other_results=5)
+                solver_team_rating = float(ratings.get(selected_team, 0.0))
+                impact_df["solver_team_rating"] = solver_team_rating
 
+                # Mark blowout-ignored games using the same rule as solve_ratings()
+                ignored_idx = _ignored_blowouts(games_list, ratings, min_other_results=5)
                 ignored_keys: set[tuple[date, str, str, str]] = set()
                 for i in ignored_idx:
                     g = games_list[i]
                     s1, s2 = int(g.score_a), int(g.score_b)
-                    # Include both orientations so we can match rows regardless of team perspective
+                    # Include both orientations so we can match regardless of perspective
                     ignored_keys.add((g.date, g.team_a, g.team_b, f"{s1}-{s2}"))
                     ignored_keys.add((g.date, g.team_b, g.team_a, f"{s2}-{s1}"))
 
@@ -354,22 +351,17 @@ with tab_rankings:
                     axis=1,
                 )
 
-                # Zero-out fields for ignored games BEFORE totals/LOO math
-                impact_df.loc[
-                    impact_df["ignored_blowout"],
-                    ["combined_weight", "weighted_contribution", "rating_impact"],
-                ] = 0.0
+                # Zero out weight/contribution for ignored games so they produce no impact
+                impact_df.loc[impact_df["ignored_blowout"], ["combined_weight", "weighted_contribution"]] = 0.0
 
-                # Use consistent baseline for LOO math (weighted-average baseline)
-                solver_team_rating = float(ratings.get(selected_team, 0.0))
-                impact_df["solver_team_rating"] = solver_team_rating
-
+                # Use a consistent baseline for leave-one-out math: weighted average of game_ratings
                 total_w = float(impact_df["combined_weight"].sum())
                 total_wc = float(impact_df["weighted_contribution"].sum())
                 approx_team_rating = (total_wc / total_w) if total_w > 0 else solver_team_rating
-                impact_df["team_rating"] = approx_team_rating  # keep column name used by the table
-                impact_df["rating_diff"] = impact_df["game_rating"] - impact_df["team_rating"]
+                impact_df["team_rating"] = approx_team_rating
 
+                # Approx marginal impact of each game on the team's final (weighted-average) rating:
+                # impact_k = R_with_all - R_without_k
                 def _loo_impact(row: pd.Series) -> float:
                     w = float(row["combined_weight"])
                     wc = float(row["weighted_contribution"])
@@ -377,11 +369,90 @@ with tab_rankings:
                     if denom <= 0:
                         return 0.0
                     rating_without = (total_wc - wc) / denom
-                    return approx_team_rating - rating_without
+                    return approx_team_rating - rating_without  # + means this game boosts rating
 
                 impact_df["rating_impact"] = impact_df.apply(_loo_impact, axis=1)
 
-                impact_df = impact_df.sort_values("game_date", ascending=False)
+                # Ensure ignored games show no impact
+                impact_df.loc[impact_df["ignored_blowout"], ["rating_impact"]] = 0.0
+
+                # rating_diff = game_rating - team_rating
+                impact_df["rating_diff"] = impact_df["game_rating"] - impact_df["team_rating"]
+
+                # Shared scale so Event total_impact shading matches Game rating_impact shading
+                max_abs_scale = float(impact_df["rating_impact"].abs().max() or 1.0)
+
+                # ---- Event-level impact table (single table + selectbox filter) ----
+                event_impact = (
+                    impact_df.groupby("event", dropna=False)
+                    .agg(
+                        games=("event", "size"),
+                        team_rating=("team_rating", "mean"),  # constant for team; mean is fine
+                        avg_opp_rating=("opponent_rating", "mean"),
+                        avg_game_rating=("game_rating", "mean"),
+                        avg_rating_diff=("rating_diff", "mean"),
+                        total_impact=("rating_impact", "sum"),
+                        avg_impact=("rating_impact", "mean"),
+                        sum_weight=("combined_weight", "sum"),
+                    )
+                    .reset_index()
+                    .sort_values("total_impact", ascending=False)
+                )
+
+                # Round decimal fields to 2dp for display stability (incl sum_weight)
+                for col in [
+                    "team_rating",
+                    "avg_opp_rating",
+                    "avg_game_rating",
+                    "avg_rating_diff",
+                    "total_impact",
+                    "avg_impact",
+                    "sum_weight",
+                ]:
+                    if col in event_impact.columns:
+                        event_impact[col] = event_impact[col].astype(float).round(2)
+
+                event_styled = (
+                    event_impact[
+                        [
+                            "event",
+                            "games",
+                            "team_rating",
+                            "avg_opp_rating",
+                            "avg_game_rating",
+                            "avg_rating_diff",
+                            "total_impact",
+                            "avg_impact",
+                            "sum_weight",
+                        ]
+                    ]
+                    .style.format(
+                        {
+                            "team_rating": "{:.2f}",
+                            "avg_opp_rating": "{:.2f}",
+                            "avg_game_rating": "{:.2f}",
+                            "avg_rating_diff": "{:+.2f}",
+                            "total_impact": "{:+.2f}",
+                            "avg_impact": "{:+.2f}",
+                            "sum_weight": "{:.2f}",
+                        }
+                    )
+                    .applymap(lambda v: _rgba_impact(v, max_abs_scale), subset=["total_impact"])
+                )
+
+                st.dataframe(event_styled, hide_index=True, use_container_width=True)
+
+                event_choices = ["(all)"] + event_impact["event"].astype(str).tolist()
+                selected_event = st.selectbox("Filter games below to event (optional)", options=event_choices)
+
+                # Filter the per-game table by selected event (if any)
+                impact_df_display = impact_df.copy()
+                if selected_event != "(all)":
+                    impact_df_display = impact_df_display[impact_df_display["event"].astype(str) == selected_event]
+
+                impact_df_display = impact_df_display.sort_values("game_date", ascending=False)
+
+                st.markdown("#### Game Impact")
 
                 display_cols = [
                     "game_date",
@@ -406,9 +477,11 @@ with tab_rankings:
                     "combined_weight": "{:.2f}",
                 }
 
-                max_abs = float(impact_df["rating_impact"].abs().max() or 1.0)
+                # Use the shared scale so it matches the middle table
+                max_abs = max_abs_scale
+
                 styled = (
-                    impact_df[display_cols]
+                    impact_df_display[display_cols]
                     .style.format(fmt)
                     .applymap(lambda v: _rgba_impact(v, max_abs), subset=["rating_impact"])
                 )
