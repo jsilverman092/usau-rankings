@@ -379,6 +379,13 @@ with tab_rankings:
                 # rating_diff = game_rating - team_rating
                 impact_df["rating_diff"] = impact_df["game_rating"] - impact_df["team_rating"]
 
+                # NEW: blowout-ignored games should NOT count toward avg_game_rating / avg_rating_diff.
+                # Set game_rating and rating_diff to missing so groupby mean skips them,
+                # while still keeping the game for counts/weights/impact.
+                impact_df.loc[impact_df["ignored_blowout"], ["game_rating", "rating_diff"]] = pd.NA
+                impact_df["game_rating"] = pd.to_numeric(impact_df["game_rating"], errors="coerce")
+                impact_df["rating_diff"] = pd.to_numeric(impact_df["rating_diff"], errors="coerce")
+
                 # Shared scale so Event total_impact shading matches Game rating_impact shading
                 max_abs_scale = float(impact_df["rating_impact"].abs().max() or 1.0)
 
@@ -410,7 +417,7 @@ with tab_rankings:
                     "sum_weight",
                 ]:
                     if col in event_impact.columns:
-                        event_impact[col] = event_impact[col].astype(float).round(2)
+                        event_impact[col] = pd.to_numeric(event_impact[col], errors="coerce").round(2)
 
                 event_styled = (
                     event_impact[
